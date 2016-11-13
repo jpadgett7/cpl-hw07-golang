@@ -82,7 +82,20 @@ func (r Result) String() string {
 // It returns the number of occurences found while scanning and the
 // first error encountered, if any.
 func countOccurrences(word string, s io.Reader) (uint, error) {
-
+	// Initialize Scanner and return variables
+	scanner := bufio.NewScanner(s)
+	scanner.Split(bufio.ScanWords)
+	var found uint = 0
+	// Scan file word-by-word
+	for scanner.Scan() {
+		werd := scanner.Bytes()
+		// If word matches "werd" found in file, increment found counter
+		if string(werd) == word {
+			found++
+		}
+	}
+	retErr := scanner.Err()
+	return found, retErr
 }
 
 // wordsOnPage reads links from the `links` channel searching for
@@ -96,7 +109,22 @@ func countOccurrences(word string, s io.Reader) (uint, error) {
 // and sent over the `results` channel. When there are no more links
 // to read, the function returns.
 func wordsOnPage(word string, links chan string, results chan Result) {
-
+	var wordCount uint
+	resErr := errors.New("<nil>")
+	for {
+		wordCount = 0
+		url := <-links
+		resp, err := http.Get(url)
+		if err != nil {
+			resErr = err
+		} else if resp.Status != "200 OK" {
+			resErr = errors.New("Did not receive 200 OK")
+		} else {
+			wordCount, resErr = countOccurrences(word, resp.Body)
+		}
+		res := Result{url, wordCount, resErr}
+		results <- res
+	}
 }
 
 //Parses CLI args. Spins up workers (goroutines) as specified by the
@@ -104,5 +132,18 @@ func wordsOnPage(word string, links chan string, results chan Result) {
 //channel for processing, closes the channel, then reads all results
 //from goroutines.
 func main() {
-
+	searchTerm, numWorkers, links := parseCLI()
+	c_links := make(chan string, len(links))
+	c_results := make(chan Result, len(links))
+	for i := uint(0); i < numWorkers; i++ {
+		go wordsOnPage(searchTerm, c_links, c_results)
+	}
+	for i := 0; i < len(links); i++ {
+		c_links <- links[i]
+	}
+	close(c_links)
+	for result := range c_results {
+		fmt.Println(result)
+	}
+	close(c_results)
 }
