@@ -85,17 +85,15 @@ func countOccurrences(word string, s io.Reader) (uint, error) {
 	// Initialize Scanner and return variables
 	scanner := bufio.NewScanner(s)
 	scanner.Split(bufio.ScanWords)
-	var found uint = 0
+	var counter uint = 0
 	// Scan file word-by-word
 	for scanner.Scan() {
-		werd := scanner.Bytes()
-		// If word matches "werd" found in file, increment found counter
-		if string(werd) == word {
-			found++
+		// If word matches a word found in file, increment counter
+		if scanner.Text() == word {
+			counter++
 		}
 	}
-	retErr := scanner.Err()
-	return found, retErr
+	return counter, scanner.Err()
 }
 
 // wordsOnPage reads links from the `links` channel searching for
@@ -109,22 +107,24 @@ func countOccurrences(word string, s io.Reader) (uint, error) {
 // and sent over the `results` channel. When there are no more links
 // to read, the function returns.
 func wordsOnPage(word string, links chan string, results chan Result) {
-	var wordCount uint
-	resErr := errors.New("<nil>")
-	for {
-		wordCount = 0
-		url := <-links
-		resp, err := http.Get(url)
+	// Loop over every entry in buffered channel links
+	for link := range links {
+		// Issue a GET to the url, store data in resp, error in err
+		resp, err := http.Get(link)
 		if err != nil {
-			resErr = err
+			// Get() returns error, URL not open
+			results <- Result{link, 0, err}
 		} else if resp.Status != "200 OK" {
-			resErr = errors.New("Did not receive 200 OK")
+			// Something went wrong opening URL
+			resErr := errors.New("Did not receive 200 OK")
+			results <- Result{link, 0, resErr}
 		} else {
-			wordCount, resErr = countOccurrences(word, resp.Body)
+			// No errors detected
+			wordCount, resErr := countOccurrences(word, resp.Body)
+			results <- Result{link, wordCount, resErr}
 		}
-		res := Result{url, wordCount, resErr}
-		results <- res
 	}
+	return
 }
 
 //Parses CLI args. Spins up workers (goroutines) as specified by the
@@ -135,15 +135,19 @@ func main() {
 	searchTerm, numWorkers, links := parseCLI()
 	c_links := make(chan string, len(links))
 	c_results := make(chan Result, len(links))
+	// Create our workers (goroutines) for processing urls
 	for i := uint(0); i < numWorkers; i++ {
 		go wordsOnPage(searchTerm, c_links, c_results)
 	}
-	for i := 0; i < len(links); i++ {
-		c_links <- links[i]
+	// Add urls to links channel
+	for j := 0; j < len(links); j++ {
+		c_links <- links[j]
 	}
-	close(c_links)
-	for result := range c_results {
-		fmt.Println(result)
+	close(c_links) // Leave this alone now
+	// Print whatever the workers bring back
+	for k := 0; k < len(links); k++ {
+		fmt.Println(<-c_results)
 	}
-	close(c_results)
+	close(c_results) // All done, closing up shop
+	return
 }
